@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # A lógica de corte (módulo importado pelo app) e o serviço
 COPY cortar_banners.py .
 COPY app.py .
+COPY index.html .
 
 # A maioria das plataformas (Render, Railway, Fly) injeta a porta via $PORT
 ENV PORT=8000
