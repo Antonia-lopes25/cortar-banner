@@ -261,11 +261,83 @@ def _cor_fundo(arr, cantos_frac=0.04):
     return np.median(cantos, axis=0)
 
 
+def _divisorias_claras(arr, eixo, n_alvo, lim_claro=232, max_larg_frac=0.03):
+    """
+    Detecta DIVISÓRIAS finas e CLARAS (faixas quase brancas) que separam banners
+    — comuns em composições onde os banners são colados mas com uma linha branca
+    fina entre eles. Retorna (blocos, faixas_descartadas) onde blocos são os
+    intervalos de conteúdo e faixas são as divisórias a remover.
+
+    Critério de divisória: linha/coluna clara (média alta) E lisa (variância
+    baixa) ao longo de toda a extensão. Procura as (n_alvo-1) divisórias mais
+    fortes, espaçadas de forma coerente. Devolve ([], []) se não encontrar um
+    conjunto consistente — aí outro método assume.
+    """
+    a = arr.astype(np.float32)
+    comprimento = a.shape[0] if eixo == 0 else a.shape[1]
+
+    if eixo == 0:
+        media = a.mean(axis=1).mean(axis=1)      # por linha
+        var = a.var(axis=1).mean(axis=1)
+    else:
+        media = a.mean(axis=0).mean(axis=1)      # por coluna
+        var = a.var(axis=0).mean(axis=1)
+
+    # uma linha/coluna é "divisória clara" se clara e lisa
+    is_div = (media >= lim_claro) & (var <= 120)
+
+    # agrupa em faixas contíguas
+    faixas = []
+    i = 0
+    while i < comprimento:
+        if is_div[i]:
+            j = i
+            while j < comprimento and is_div[j]:
+                j += 1
+            faixas.append((i, j))
+            i = j
+        else:
+            i += 1
+
+    # descarta faixas largas demais (não é divisória, é fundo de design claro)
+    max_larg = max(2, int(comprimento * max_larg_frac))
+    faixas = [f for f in faixas if (f[1] - f[0]) <= max_larg]
+    # descarta faixas coladas nas bordas (são margem externa, não divisória interna)
+    margem = int(comprimento * 0.05)
+    faixas = [f for f in faixas if f[0] > margem and f[1] < comprimento - margem]
+
+    if len(faixas) < n_alvo - 1:
+        return [], []
+
+    # se houver mais faixas que o necessário, escolhe as que melhor dividem
+    # em n_alvo blocos de tamanho parecido
+    centros = [ (f[0]+f[1])//2 for f in faixas ]
+    if len(faixas) > n_alvo - 1:
+        ideais = [comprimento * k / n_alvo for k in range(1, n_alvo)]
+        escolhidas = []
+        usadas = set()
+        for alvo in ideais:
+            best = min(range(len(centros)),
+                       key=lambda idx: abs(centros[idx]-alvo) if idx not in usadas else 1e9)
+            usadas.add(best)
+            escolhidas.append(faixas[best])
+        faixas = sorted(escolhidas)
+
+    # monta blocos entre as faixas
+    blocos = []
+    prev = 0
+    for (f0, f1) in faixas:
+        blocos.append((prev, f0))
+        prev = f1
+    blocos.append((prev, comprimento))
+    return blocos, faixas
+
+
 # --------------------------------------------------------------------------
 # Auto-trim: remove moldura uniforme (de qualquer cor) ao redor do banner
 # --------------------------------------------------------------------------
 def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45,
-                   frac_linha=0.5, margem_seca=2):
+                   frac_linha=0.5, margem_seca=2, lados=None):
     """
     Remove moldura + sombra/penumbra ao redor de UM banner, deixando CORTE SECO.
 
@@ -279,6 +351,12 @@ def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45,
         # o bbox já aplica teto de trim fino (max_trim_frac interno),
         # preservando fundo de design. Aqui só usamos o resultado.
         x0, y0, x1, y1 = _cv_bbox(banner, margem=margem_seca)
+        # respeita quais lados podem ser aparados (corte seco não apara borda interna)
+        if lados is not None:
+            if not lados.get("top", True):    y0 = 0
+            if not lados.get("bottom", True): y1 = H
+            if not lados.get("left", True):   x0 = 0
+            if not lados.get("right", True):  x1 = W
         if x1 > x0 and y1 > y0:
             return banner[y0:y1, x0:x1]
         return banner
@@ -391,9 +469,28 @@ def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=True):
     def _proj(eixo):
         return _blocos_por_projecao(arr, eixo, fundo, tol_fundo)
 
-    # ---- Método primário A: blocos via OpenCV (limiar automático Otsu) ----
+    # ---- Método primário 0: DIVISÓRIAS claras finas (linhas brancas entre banners) ----
     escolha = None  # (eixo, blocos)
-    if _CV_OK:
+    div_eixo = None
+    eixos_testar = []
+    if orientacao == "vertical":
+        eixos_testar = [0]
+    elif orientacao == "horizontal":
+        eixos_testar = [1]
+    else:
+        eixos_testar = [1, 0] if W >= H else [0, 1]
+
+    for eixo in eixos_testar:
+        blocos, faixas = _divisorias_claras(arr, eixo, n)
+        if debug:
+            print(f"  [debug] divisórias claras eixo={eixo}: {len(faixas)} faixas")
+        if len(blocos) == n:
+            escolha = (eixo, blocos)
+            div_eixo = eixo
+            break
+
+    # ---- Método primário A: blocos via OpenCV (limiar automático Otsu) ----
+    if escolha is None and _CV_OK:
         if orientacao in ("auto", "vertical"):
             bv = _cv_blocos(arr, 0)
             if debug:
@@ -430,10 +527,21 @@ def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=True):
             else:
                 banners.append(arr[:, a0:a1, :])
         if aparar:
-            banners = [aparar_moldura(b) for b in banners]
+            # Se a separação veio de DIVISÓRIAS (corte já cai na linha entre
+            # banners), não aparar as bordas no eixo do corte — ali não há
+            # moldura, é a divisa com o vizinho. Só apara bordas perpendiculares.
+            if div_eixo is not None:
+                if div_eixo == 0:   # empilhado vertical: não tocar topo/base
+                    lados = {"top": False, "bottom": False, "left": True, "right": True}
+                else:               # lado a lado: não tocar esquerda/direita
+                    lados = {"top": True, "bottom": True, "left": False, "right": False}
+                banners = [aparar_moldura(b, lados=lados) for b in banners]
+            else:
+                banners = [aparar_moldura(b) for b in banners]
         ori_txt = "vertical" if eixo == 0 else "horizontal"
         if debug:
-            print(f"  [debug] método: projeção | orientação: {ori_txt}")
+            metodo = "divisórias" if div_eixo is not None else "projeção/opencv"
+            print(f"  [debug] método: {metodo} | orientação: {ori_txt}")
         return banners, ori_txt, [b[0] for b in blocos[1:]]
 
     # ---- Fallback: detecção de fronteiras (corte seco sem moldura clara) ----
