@@ -199,6 +199,127 @@ def _expandir_faixa(arr, eixo, pos, tol_var=18.0, max_frac=0.06):
     return ini, fim
 
 
+def _blocos_por_projecao(arr, eixo, fundo, tol, min_bloco_frac=0.04, min_gap_frac=0.01):
+    """
+    Encontra blocos de CONTEÚDO ao longo de `eixo`, separando-os por faixas de
+    FUNDO (qualquer cor uniforme amostrada nos cantos). Robusto a margens largas
+    (mockup) e a corte seco.
+
+    Projeta a máscara de conteúdo: para cada linha/coluna, qual fração é conteúdo.
+    Sequências acima do limiar viram blocos; faixas abaixo viram separadores.
+    Retorna lista de (ini, fim) dos blocos.
+    """
+    a = arr.astype(np.float32)
+    dist = np.sqrt(((a - fundo) ** 2).sum(axis=2))
+    conteudo = dist > tol  # máscara booleana (H, W)
+
+    if eixo == 0:
+        perfil = conteudo.mean(axis=1)   # por linha
+    else:
+        perfil = conteudo.mean(axis=0)   # por coluna
+
+    comprimento = perfil.shape[0]
+    limiar = 0.06  # 6% da linha/coluna precisa ser conteúdo p/ contar como banner
+    dentro = perfil > limiar
+
+    # agrupa sequências contíguas de "dentro"
+    blocos = []
+    i = 0
+    while i < comprimento:
+        if dentro[i]:
+            j = i
+            while j < comprimento and dentro[j]:
+                j += 1
+            blocos.append((i, j))
+            i = j
+        else:
+            i += 1
+
+    # funde blocos separados por gaps minúsculos (ruído dentro do banner)
+    min_gap = max(1, int(comprimento * min_gap_frac))
+    fundidos = []
+    for b in blocos:
+        if fundidos and b[0] - fundidos[-1][1] <= min_gap:
+            fundidos[-1] = (fundidos[-1][0], b[1])
+        else:
+            fundidos.append(list(b))
+    # descarta blocos pequenos demais (artefatos)
+    min_bloco = int(comprimento * min_bloco_frac)
+    fundidos = [tuple(b) for b in fundidos if (b[1] - b[0]) >= min_bloco]
+    return fundidos
+
+
+def _cor_fundo(arr, cantos_frac=0.04):
+    """Estima a cor de fundo da imagem pela mediana dos quatro cantos."""
+    a = arr.astype(np.float32)
+    H, W = a.shape[:2]
+    cy = max(1, int(H * cantos_frac))
+    cx = max(1, int(W * cantos_frac))
+    cantos = np.concatenate([
+        a[:cy, :cx].reshape(-1, 3), a[:cy, W - cx:].reshape(-1, 3),
+        a[H - cy:, :cx].reshape(-1, 3), a[H - cy:, W - cx:].reshape(-1, 3),
+    ], axis=0)
+    return np.median(cantos, axis=0)
+
+
+# --------------------------------------------------------------------------
+# Auto-trim: remove moldura uniforme (de qualquer cor) ao redor do banner
+# --------------------------------------------------------------------------
+def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45):
+    """
+    Remove a moldura/fundo uniforme ao redor de UM banner, qualquer que seja a
+    cor (cinza, branco, etc.) e tolerando sombra suave de mockup.
+
+    Como funciona:
+      1) Amostra os quatro cantos para estimar a cor de fundo da moldura.
+      2) Marca como "conteúdo" todo pixel cuja distância de cor ao fundo seja
+         maior que `tol`. A sombra suave fica perto do fundo, então é tratada
+         como moldura e removida junto.
+      3) Recorta no bounding box do conteúdo. Limita o trim a `max_trim_frac`
+         de cada lado, como trava de segurança contra recorte excessivo.
+
+    Se não houver moldura detectável (o banner já preenche a imagem), devolve
+    o banner inalterado.
+    """
+    a = banner.astype(np.float32)
+    H, W = a.shape[:2]
+    cy = max(1, int(H * cantos_frac))
+    cx = max(1, int(W * cantos_frac))
+
+    # cor de fundo: mediana dos quatro cantos (robusta a ruído)
+    cantos = np.concatenate([
+        a[:cy, :cx].reshape(-1, 3),
+        a[:cy, W - cx:].reshape(-1, 3),
+        a[H - cy:, :cx].reshape(-1, 3),
+        a[H - cy:, W - cx:].reshape(-1, 3),
+    ], axis=0)
+    fundo = np.median(cantos, axis=0)
+
+    # máscara de conteúdo: distância de cor ao fundo acima da tolerância
+    dist = np.sqrt(((a - fundo) ** 2).sum(axis=2))
+    conteudo = dist > tol
+
+    # se quase nada é conteúdo, não há o que aparar com segurança
+    if conteudo.mean() < 0.02:
+        return banner
+
+    linhas = np.where(conteudo.any(axis=1))[0]
+    colunas = np.where(conteudo.any(axis=0))[0]
+    if linhas.size == 0 or colunas.size == 0:
+        return banner
+
+    y0, y1 = linhas[0], linhas[-1] + 1
+    x0, x1 = colunas[0], colunas[-1] + 1
+
+    # trava de segurança: não aparar mais que max_trim_frac de cada lado
+    y0 = min(y0, int(H * max_trim_frac))
+    x0 = min(x0, int(W * max_trim_frac))
+    y1 = max(y1, int(H * (1 - max_trim_frac)))
+    x1 = max(x1, int(W * (1 - max_trim_frac)))
+
+    return banner[y0:y1, x0:x1]
+
+
 # --------------------------------------------------------------------------
 # Recorte
 # --------------------------------------------------------------------------
@@ -239,11 +360,49 @@ def _recortar(arr, eixo, fronteiras, descartar_faixa=True):
 # --------------------------------------------------------------------------
 # Orquestração
 # --------------------------------------------------------------------------
-def cortar(caminho, n=4, orientacao="auto", debug=False):
+def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=True):
     img = Image.open(caminho).convert("RGB")
     arr = np.asarray(img)
     H, W = arr.shape[:2]
 
+    fundo = _cor_fundo(arr)
+    # tolerância de fundo: relativa ao contraste da imagem
+    tol_fundo = 24.0
+
+    def _proj(eixo):
+        return _blocos_por_projecao(arr, eixo, fundo, tol_fundo)
+
+    # ---- Método primário: projeção de conteúdo (lida com mockup e corte seco) ----
+    escolha = None  # (eixo, blocos)
+    if orientacao in ("auto", "vertical"):
+        bv = _proj(0)
+        if debug:
+            print(f"  [debug] projeção vertical: {len(bv)} blocos -> {bv}")
+        if len(bv) == n:
+            escolha = (0, bv)
+    if escolha is None and orientacao in ("auto", "horizontal"):
+        bh = _proj(1)
+        if debug:
+            print(f"  [debug] projeção horizontal: {len(bh)} blocos -> {bh}")
+        if len(bh) == n:
+            escolha = (1, bh)
+
+    if escolha is not None:
+        eixo, blocos = escolha
+        banners = []
+        for (a0, a1) in blocos:
+            if eixo == 0:
+                banners.append(arr[a0:a1, :, :])
+            else:
+                banners.append(arr[:, a0:a1, :])
+        if aparar:
+            banners = [aparar_moldura(b) for b in banners]
+        ori_txt = "vertical" if eixo == 0 else "horizontal"
+        if debug:
+            print(f"  [debug] método: projeção | orientação: {ori_txt}")
+        return banners, ori_txt, [b[0] for b in blocos[1:]]
+
+    # ---- Fallback: detecção de fronteiras (corte seco sem moldura clara) ----
     def _processa(eixo):
         comprimento = H if eixo == 0 else W
         fronteiras, _ = _candidatos(arr, eixo, n, debug=debug)
@@ -256,24 +415,23 @@ def cortar(caminho, n=4, orientacao="auto", debug=False):
     elif orientacao == "horizontal":
         eixo = 1
         fronteiras, _ = _candidatos(arr, eixo, n, debug=debug)
-    else:  # auto: testa os dois e escolhe o mais equilibrado,
-           # com leve viés pela proporção (imagem alta -> provavelmente vertical)
+    else:
         fv, qv = _processa(0)
         fh, qh = _processa(1)
-        # viés suave pela forma da imagem
         if H >= W:
             qv += 0.05
         else:
             qh += 0.05
         if debug:
-            print(f"  [debug] qualidade vertical={qv:.3f} | horizontal={qh:.3f}")
-        if qv >= qh:
-            eixo, fronteiras = 0, fv
-        else:
-            eixo, fronteiras = 1, fh
+            print(f"  [debug] fallback fronteiras — qualidade v={qv:.3f} h={qh:.3f}")
+        eixo, fronteiras = (0, fv) if qv >= qh else (1, fh)
 
     banners = _recortar(arr, eixo, fronteiras, descartar_faixa=True)
+    if aparar:
+        banners = [aparar_moldura(b) for b in banners]
     ori_txt = "vertical" if eixo == 0 else "horizontal"
+    if debug:
+        print(f"  [debug] método: fronteiras (fallback) | orientação: {ori_txt}")
     return banners, ori_txt, fronteiras
 
 
@@ -287,6 +445,8 @@ def main():
     ap.add_argument("--h", type=int, default=None)
     ap.add_argument("--fmt", choices=["png", "jpg"], default="png")
     ap.add_argument("--debug", action="store_true")
+    ap.add_argument("--sem-aparar", action="store_true",
+                    help="não remove a moldura/fundo ao redor de cada banner")
     args = ap.parse_args()
 
     if not os.path.isfile(args.entrada):
@@ -294,7 +454,8 @@ def main():
         sys.exit(1)
 
     banners, ori, fronteiras = cortar(args.entrada, n=args.n,
-                                      orientacao=args.orientacao, debug=args.debug)
+                                      orientacao=args.orientacao, debug=args.debug,
+                                      aparar=not args.sem_aparar)
 
     os.makedirs(args.saida, exist_ok=True)
     base = os.path.splitext(os.path.basename(args.entrada))[0]
