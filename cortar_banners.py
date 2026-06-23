@@ -199,30 +199,25 @@ def _expandir_faixa(arr, eixo, pos, tol_var=18.0, max_frac=0.06):
     return ini, fim
 
 
-def _blocos_por_projecao(arr, eixo, fundo, tol, min_bloco_frac=0.04, min_gap_frac=0.01):
+def _blocos_por_projecao(arr, eixo, fundo, tol, min_bloco_frac=0.04, min_gap_frac=0.005):
     """
     Encontra blocos de CONTEÚDO ao longo de `eixo`, separando-os por faixas de
-    FUNDO (qualquer cor uniforme amostrada nos cantos). Robusto a margens largas
-    (mockup) e a corte seco.
-
-    Projeta a máscara de conteúdo: para cada linha/coluna, qual fração é conteúdo.
-    Sequências acima do limiar viram blocos; faixas abaixo viram separadores.
-    Retorna lista de (ini, fim) dos blocos.
+    FUNDO. Usa conteúdo FORTE (bem distante do fundo) para que a sombra/penumbra
+    — que conecta cartões num mockup — não funda tudo num bloco só.
     """
     a = arr.astype(np.float32)
     dist = np.sqrt(((a - fundo) ** 2).sum(axis=2))
-    conteudo = dist > tol  # máscara booleana (H, W)
+    forte = dist > (tol * 2.0)   # só conteúdo forte conta
 
     if eixo == 0:
-        perfil = conteudo.mean(axis=1)   # por linha
+        perfil = forte.mean(axis=1)
     else:
-        perfil = conteudo.mean(axis=0)   # por coluna
+        perfil = forte.mean(axis=0)
 
     comprimento = perfil.shape[0]
-    limiar = 0.06  # 6% da linha/coluna precisa ser conteúdo p/ contar como banner
+    limiar = 0.10  # 10% da linha/coluna precisa ser conteúdo forte
     dentro = perfil > limiar
 
-    # agrupa sequências contíguas de "dentro"
     blocos = []
     i = 0
     while i < comprimento:
@@ -235,7 +230,6 @@ def _blocos_por_projecao(arr, eixo, fundo, tol, min_bloco_frac=0.04, min_gap_fra
         else:
             i += 1
 
-    # funde blocos separados por gaps minúsculos (ruído dentro do banner)
     min_gap = max(1, int(comprimento * min_gap_frac))
     fundidos = []
     for b in blocos:
@@ -243,7 +237,6 @@ def _blocos_por_projecao(arr, eixo, fundo, tol, min_bloco_frac=0.04, min_gap_fra
             fundidos[-1] = (fundidos[-1][0], b[1])
         else:
             fundidos.append(list(b))
-    # descarta blocos pequenos demais (artefatos)
     min_bloco = int(comprimento * min_bloco_frac)
     fundidos = [tuple(b) for b in fundidos if (b[1] - b[0]) >= min_bloco]
     return fundidos
@@ -265,57 +258,67 @@ def _cor_fundo(arr, cantos_frac=0.04):
 # --------------------------------------------------------------------------
 # Auto-trim: remove moldura uniforme (de qualquer cor) ao redor do banner
 # --------------------------------------------------------------------------
-def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45):
+def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45,
+                   frac_linha=0.5, margem_seca=2):
     """
-    Remove a moldura/fundo uniforme ao redor de UM banner, qualquer que seja a
-    cor (cinza, branco, etc.) e tolerando sombra suave de mockup.
+    Remove moldura + sombra/penumbra ao redor de UM banner, deixando CORTE SECO.
 
-    Como funciona:
-      1) Amostra os quatro cantos para estimar a cor de fundo da moldura.
-      2) Marca como "conteúdo" todo pixel cuja distância de cor ao fundo seja
-         maior que `tol`. A sombra suave fica perto do fundo, então é tratada
-         como moldura e removida junto.
-      3) Recorta no bounding box do conteúdo. Limita o trim a `max_trim_frac`
-         de cada lado, como trava de segurança contra recorte excessivo.
-
-    Se não houver moldura detectável (o banner já preenche a imagem), devolve
-    o banner inalterado.
+    A sombra de mockup é um degradê GRADUAL: a distância ao fundo sobe devagar
+    da borda para dentro até estabilizar no conteúdo sólido. Cortar na primeira
+    mudança deixa penumbra; então avançamos por toda a rampa do degradê até o
+    perfil atingir um PLATÔ (conteúdo forte e estável), e cortamos ali.
     """
     a = banner.astype(np.float32)
     H, W = a.shape[:2]
-    cy = max(1, int(H * cantos_frac))
-    cx = max(1, int(W * cantos_frac))
 
-    # cor de fundo: mediana dos quatro cantos (robusta a ruído)
-    cantos = np.concatenate([
-        a[:cy, :cx].reshape(-1, 3),
-        a[:cy, W - cx:].reshape(-1, 3),
-        a[H - cy:, :cx].reshape(-1, 3),
-        a[H - cy:, W - cx:].reshape(-1, 3),
+    # cor de fundo robusta: mediana por canal sobre TODOS os pixels de borda —
+    # assim um canto destoante (ex.: arroxeado do conteúdo) não desloca a estimativa.
+    cy = max(1, int(H * 0.02))
+    cx = max(1, int(W * 0.02))
+    borda_px = np.concatenate([
+        a[:cy, :].reshape(-1, 3),      # faixa topo
+        a[H - cy:, :].reshape(-1, 3),  # faixa base
+        a[:, :cx].reshape(-1, 3),      # faixa esquerda
+        a[:, W - cx:].reshape(-1, 3),  # faixa direita
     ], axis=0)
-    fundo = np.median(cantos, axis=0)
+    fundo = np.median(borda_px, axis=0)
 
-    # máscara de conteúdo: distância de cor ao fundo acima da tolerância
     dist = np.sqrt(((a - fundo) ** 2).sum(axis=2))
-    conteudo = dist > tol
-
-    # se quase nada é conteúdo, não há o que aparar com segurança
-    if conteudo.mean() < 0.02:
+    forte = dist > (tol * 2.0)
+    if forte.mean() < 0.02:
         return banner
 
-    linhas = np.where(conteudo.any(axis=1))[0]
-    colunas = np.where(conteudo.any(axis=0))[0]
-    if linhas.size == 0 or colunas.size == 0:
-        return banner
+    # perfil de INTENSIDADE média por linha/coluna (capta a rampa da sombra)
+    pr_lin = dist.mean(axis=1)
+    pr_col = dist.mean(axis=0)
 
-    y0, y1 = linhas[0], linhas[-1] + 1
-    x0, x1 = colunas[0], colunas[-1] + 1
+    # limiar absoluto: a borda do conteúdo é onde a intensidade média cruza
+    # `lim_corte`. Abaixo disso é fundo ou sombra (penumbra). Validado em
+    # imagens reais de mockup. Ajustável se a sombra for muito densa.
+    lim_corte = 70.0
 
-    # trava de segurança: não aparar mais que max_trim_frac de cada lado
-    y0 = min(y0, int(H * max_trim_frac))
-    x0 = min(x0, int(W * max_trim_frac))
-    y1 = max(y1, int(H * (1 - max_trim_frac)))
-    x1 = max(x1, int(W * (1 - max_trim_frac)))
+    def _borda(perfil):
+        n = perfil.shape[0]
+        i = 0
+        while i < n and perfil[i] < lim_corte:
+            i += 1
+        j = n - 1
+        while j > i and perfil[j] < lim_corte:
+            j -= 1
+        if i >= j:  # nada cruzou o limiar: não apara
+            return 0, n
+        return i, j + 1
+
+    y0, y1 = _borda(pr_lin)
+    x0, x1 = _borda(pr_col)
+
+    # margem seca extra para garantir zero resíduo de transição
+    y0 = min(y0 + margem_seca, H - 1); x0 = min(x0 + margem_seca, W - 1)
+    y1 = max(y1 - margem_seca, y0 + 1); x1 = max(x1 - margem_seca, x0 + 1)
+
+    # trava de segurança
+    y0 = min(y0, int(H * max_trim_frac)); x0 = min(x0, int(W * max_trim_frac))
+    y1 = max(y1, int(H * (1 - max_trim_frac))); x1 = max(x1, int(W * (1 - max_trim_frac)))
 
     return banner[y0:y1, x0:x1]
 
