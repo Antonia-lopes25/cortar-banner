@@ -35,6 +35,12 @@ import sys
 import numpy as np
 from PIL import Image
 
+try:
+    from deteccao_cv import bbox_conteudo as _cv_bbox, blocos_cv as _cv_blocos
+    _CV_OK = True
+except Exception:
+    _CV_OK = False
+
 
 # --------------------------------------------------------------------------
 # Núcleo: perfil de corte ao longo de um eixo
@@ -263,11 +269,22 @@ def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45,
     """
     Remove moldura + sombra/penumbra ao redor de UM banner, deixando CORTE SECO.
 
-    A sombra de mockup é um degradê GRADUAL: a distância ao fundo sobe devagar
-    da borda para dentro até estabilizar no conteúdo sólido. Cortar na primeira
-    mudança deixa penumbra; então avançamos por toda a rampa do degradê até o
-    perfil atingir um PLATÔ (conteúdo forte e estável), e cortamos ali.
+    Método primário (se OpenCV disponível): bbox do conteúdo via máscara com
+    limiar AUTOMÁTICO (Otsu) — adapta-se ao contraste de cada imagem, sem número
+    mágico. Fallback (sem OpenCV): perfil de intensidade com limiar absoluto.
     """
+    H, W = banner.shape[:2]
+
+    if _CV_OK:
+        x0, y0, x1, y1 = _cv_bbox(banner, margem=margem_seca)
+        # trava de segurança: nunca aparar mais que max_trim_frac de cada lado
+        x0 = min(x0, int(W * max_trim_frac)); y0 = min(y0, int(H * max_trim_frac))
+        x1 = max(x1, int(W * (1 - max_trim_frac))); y1 = max(y1, int(H * (1 - max_trim_frac)))
+        if x1 > x0 and y1 > y0:
+            return banner[y0:y1, x0:x1]
+        return banner
+
+    # ---- fallback sem OpenCV (limiar absoluto) ----
     a = banner.astype(np.float32)
     H, W = a.shape[:2]
 
@@ -375,9 +392,24 @@ def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=True):
     def _proj(eixo):
         return _blocos_por_projecao(arr, eixo, fundo, tol_fundo)
 
-    # ---- Método primário: projeção de conteúdo (lida com mockup e corte seco) ----
+    # ---- Método primário A: blocos via OpenCV (limiar automático Otsu) ----
     escolha = None  # (eixo, blocos)
-    if orientacao in ("auto", "vertical"):
+    if _CV_OK:
+        if orientacao in ("auto", "vertical"):
+            bv = _cv_blocos(arr, 0)
+            if debug:
+                print(f"  [debug] opencv vertical: {len(bv)} blocos")
+            if len(bv) == n:
+                escolha = (0, bv)
+        if escolha is None and orientacao in ("auto", "horizontal"):
+            bh = _cv_blocos(arr, 1)
+            if debug:
+                print(f"  [debug] opencv horizontal: {len(bh)} blocos")
+            if len(bh) == n:
+                escolha = (1, bh)
+
+    # ---- Método primário B: projeção por limiar (cobre corte seco sem fundo) ----
+    if escolha is None and orientacao in ("auto", "vertical"):
         bv = _proj(0)
         if debug:
             print(f"  [debug] projeção vertical: {len(bv)} blocos -> {bv}")
