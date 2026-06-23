@@ -87,6 +87,11 @@
         <div><label>Altura final (h)</label><input id="h" type="number" placeholder="opcional"></div>
       </div>
 
+      <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+        <input id="aparar" type="checkbox" checked style="width:auto">
+        Aparar moldura/fundo ao redor de cada banner
+      </label>
+
       <button id="go" disabled>Cortar banners</button>
       <div id="status" class="status"></div>
       <p class="hint">Dica: deixe w/h vazios para manter o tamanho recortado original.
@@ -152,6 +157,7 @@ go.addEventListener('click', async ()=>{
   const h = document.getElementById('h').value;
   if(w) params.set('w', w);
   if(h) params.set('h', h);
+  params.set('aparar', document.getElementById('aparar').checked ? '1' : '0');
 
   const fd = new FormData();
   fd.append('file', currentFile);
