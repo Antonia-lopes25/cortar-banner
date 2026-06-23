@@ -276,10 +276,9 @@ def aparar_moldura(banner, tol=14.0, cantos_frac=0.06, max_trim_frac=0.45,
     H, W = banner.shape[:2]
 
     if _CV_OK:
+        # o bbox já aplica teto de trim fino (max_trim_frac interno),
+        # preservando fundo de design. Aqui só usamos o resultado.
         x0, y0, x1, y1 = _cv_bbox(banner, margem=margem_seca)
-        # trava de segurança: nunca aparar mais que max_trim_frac de cada lado
-        x0 = min(x0, int(W * max_trim_frac)); y0 = min(y0, int(H * max_trim_frac))
-        x1 = max(x1, int(W * (1 - max_trim_frac))); y1 = max(y1, int(H * (1 - max_trim_frac)))
         if x1 > x0 and y1 > y0:
             return banner[y0:y1, x0:x1]
         return banner
