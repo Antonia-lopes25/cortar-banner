@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cortador de Banners — Teste</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a;
+    --txt:#e7e9ee; --muted:#9aa3b2; --accent:#4E5EEA; --accent2:#6c7bff;
+    --ok:#28c76f; --err:#ff5c5c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--txt);line-height:1.5}
+  header{padding:22px 28px;border-bottom:1px solid var(--line);
+         display:flex;align-items:baseline;gap:12px}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header span{color:var(--muted);font-size:13px}
+  main{max-width:1100px;margin:0 auto;padding:28px}
+  .grid{display:grid;grid-template-columns:320px 1fr;gap:24px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}
+  label{display:block;font-size:13px;color:var(--muted);margin:14px 0 6px}
+  input,select{width:100%;padding:10px 12px;background:var(--panel2);
+       border:1px solid var(--line);border-radius:9px;color:var(--txt);font-size:14px}
+  .row{display:flex;gap:10px}
+  .row>div{flex:1}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;
+        color:var(--muted);cursor:pointer;transition:.15s;background:var(--panel2)}
+  .drop.hover{border-color:var(--accent);color:var(--txt);background:#1b2030}
+  .drop strong{color:var(--txt)}
+  button{margin-top:18px;width:100%;padding:12px;border:0;border-radius:10px;
+         background:var(--accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+  button:hover{background:var(--accent2)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .meta{font-size:13px;color:var(--muted);margin:6px 0 18px;min-height:20px}
+  .meta b{color:var(--txt)}
+  .status{font-size:13px;margin-top:10px;min-height:18px}
+  .status.ok{color:var(--ok)} .status.err{color:var(--err)}
+  .preview{display:grid;gap:14px}
+  .banner{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+          overflow:hidden}
+  .banner .bar{display:flex;justify-content:space-between;align-items:center;
+       padding:8px 12px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line)}
+  .banner .bar a{color:var(--accent2);text-decoration:none;font-weight:600}
+  .banner img{display:block;width:100%;height:auto;background:#000}
+  .thumb{max-height:70px;border-radius:8px;margin-top:10px;border:1px solid var(--line)}
+  .hint{font-size:12px;color:var(--muted);margin-top:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Cortador de Banners</h1><span>interface de teste</span>
+</header>
+<main>
+  <div class="grid">
+    <!-- Painel de controles -->
+    <div class="card">
+      <div id="drop" class="drop">
+        <strong>Clique ou arraste</strong> uma imagem aqui<br>
+        <small>PNG / JPG / WEBP</small>
+        <div id="thumbWrap"></div>
+      </div>
+      <input id="file" type="file" accept="image/*" hidden>
+
+      <label>Orientação</label>
+      <select id="orientacao">
+        <option value="auto">Auto (detectar)</option>
+        <option value="vertical">Vertical (empilhados)</option>
+        <option value="horizontal">Horizontal (lado a lado)</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label>Nº de banners</label>
+          <input id="n" type="number" value="4" min="2" max="12">
+        </div>
+        <div>
+          <label>Formato</label>
+          <select id="fmt"><option>png</option><option>jpg</option></select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div><label>Largura final (w)</label><input id="w" type="number" placeholder="opcional"></div>
+        <div><label>Altura final (h)</label><input id="h" type="number" placeholder="opcional"></div>
+      </div>
+
+      <button id="go" disabled>Cortar banners</button>
+      <div id="status" class="status"></div>
+      <p class="hint">Dica: deixe w/h vazios para manter o tamanho recortado original.
+         Preencha (ex.: 784 × 1344) para padronizar a saída.</p>
+    </div>
+
+    <!-- Resultado -->
+    <div>
+      <div id="meta" class="meta"></div>
+      <div id="preview" class="preview"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
+const go = document.getElementById('go');
+const statusEl = document.getElementById('status');
+const meta = document.getElementById('meta');
+const preview = document.getElementById('preview');
+const thumbWrap = document.getElementById('thumbWrap');
+let currentFile = null;
+
+function setFile(f){
+  if(!f) return;
+  currentFile = f;
+  go.disabled = false;
+  thumbWrap.innerHTML = '';
+  const img = document.createElement('img');
+  img.className = 'thumb';
+  img.src = URL.createObjectURL(f);
+  thumbWrap.appendChild(img);
+  statusEl.textContent = '';
+  statusEl.className = 'status';
+}
+
+drop.addEventListener('click', ()=>fileInput.click());
+fileInput.addEventListener('change', e=>setFile(e.target.files[0]));
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault(); drop.classList.add('hover');
+}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{
+  e.preventDefault(); drop.classList.remove('hover');
+}));
+drop.addEventListener('drop', e=>{
+  if(e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+});
+
+go.addEventListener('click', async ()=>{
+  if(!currentFile) return;
+  go.disabled = true;
+  statusEl.className = 'status';
+  statusEl.textContent = 'Processando…';
+  meta.innerHTML = '';
+  preview.innerHTML = '';
+
+  const params = new URLSearchParams();
+  params.set('orientacao', document.getElementById('orientacao').value);
+  params.set('n', document.getElementById('n').value || '4');
+  params.set('fmt', document.getElementById('fmt').value);
+  const w = document.getElementById('w').value;
+  const h = document.getElementById('h').value;
+  if(w) params.set('w', w);
+  if(h) params.set('h', h);
+
+  const fd = new FormData();
+  fd.append('file', currentFile);
+
+  try{
+    const r = await fetch('/cortar-upload?'+params.toString(), {method:'POST', body:fd});
+    if(!r.ok){ throw new Error('HTTP '+r.status+' — '+(await r.text())); }
+    const j = await r.json();
+
+    meta.innerHTML = `Orientação detectada: <b>${j.orientacao}</b> &nbsp;·&nbsp; `
+      + `fronteiras: <b>${JSON.stringify(j.fronteiras)}</b> &nbsp;·&nbsp; `
+      + `original: <b>${j.imagem_original.width}×${j.imagem_original.height}</b> &nbsp;·&nbsp; `
+      + `<b>${j.total}</b> banners`;
+
+    j.banners.forEach(b=>{
+      const src = `data:${b.mimeType};base64,${b.base64}`;
+      const card = document.createElement('div');
+      card.className = 'banner';
+      card.innerHTML =
+        `<div class="bar"><span>${b.fileName} · ${b.width}×${b.height}</span>`
+        + `<a href="${src}" download="${b.fileName}">baixar</a></div>`
+        + `<img src="${src}" alt="${b.fileName}">`;
+      preview.appendChild(card);
+    });
+
+    statusEl.className = 'status ok';
+    statusEl.textContent = 'Concluído ✓';
+  }catch(err){
+    statusEl.className = 'status err';
+    statusEl.textContent = 'Erro: '+err.message;
+  }finally{
+    go.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
