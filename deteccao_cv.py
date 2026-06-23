@@ -101,12 +101,18 @@ def blocos_cv(arr, eixo, n_alvo=None, min_bloco_frac=0.04):
     return fundidos
 
 
-def bbox_conteudo(banner, margem=1):
+def bbox_conteudo(banner, margem=1, max_trim_frac=0.08):
     """
     Acha a borda apertada do conteúdo de UM banner via maior contorno na máscara.
-    Devolve (x0, y0, x1, y1). Se não houver contorno utilizável (imagem ambígua,
-    banner já sangrando até a borda), devolve a imagem inteira — cortar o melhor
-    possível e seguir, nunca recusar.
+    Devolve (x0, y0, x1, y1).
+
+    SEGURANÇA CONTRA CORTE DE DESIGN: o trim de cada lado é limitado a
+    `max_trim_frac` da dimensão (padrão 8%). Assim só molduras/sombras FINAS são
+    removidas; uma área clara grande (ex.: fundo branco que faz parte do design,
+    comum em banners de moda) é preservada, pois cortá-la passaria do teto.
+
+    Se não houver contorno utilizável (imagem ambígua / banner sangrando até a
+    borda), devolve a imagem inteira — corta o melhor possível, nunca recusa.
     """
     H, W = banner.shape[:2]
     m = mascara_conteudo(banner)
@@ -115,23 +121,28 @@ def bbox_conteudo(banner, margem=1):
     if not contornos:
         return 0, 0, W, H
 
-    # une todos os contornos relevantes (descarta minúsculos) num bounding box
     area_min = 0.01 * H * W
     caixas = [cv2.boundingRect(c) for c in contornos if cv2.contourArea(c) >= area_min]
     if not caixas:
-        # fallback: maior contorno isolado
         c = max(contornos, key=cv2.contourArea)
-        x, y, w, h = cv2.boundingRect(c)
-        caixas = [(x, y, w, h)]
+        caixas = [cv2.boundingRect(c)]
 
     x0 = min(b[0] for b in caixas)
     y0 = min(b[1] for b in caixas)
     x1 = max(b[0] + b[2] for b in caixas)
     y1 = max(b[1] + b[3] for b in caixas)
 
-    # margem para dentro garante zero resíduo de borda/sombra
-    x0 = min(x0 + margem, W - 1)
-    y0 = min(y0 + margem, H - 1)
-    x1 = max(x1 - margem, x0 + 1)
-    y1 = max(y1 - margem, y0 + 1)
+    # margem para dentro
+    x0 = min(x0 + margem, W - 1); y0 = min(y0 + margem, H - 1)
+    x1 = max(x1 - margem, x0 + 1); y1 = max(y1 - margem, y0 + 1)
+
+    # TETO DE TRIM: nunca aparar mais que max_trim_frac de cada lado.
+    # Se o conteúdo só começa muito para dentro, é fundo de design -> preserva.
+    max_x = int(W * max_trim_frac)
+    max_y = int(H * max_trim_frac)
+    x0 = min(x0, max_x)
+    y0 = min(y0, max_y)
+    x1 = max(x1, W - max_x)
+    y1 = max(y1, H - max_y)
+
     return x0, y0, x1, y1
