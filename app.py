@@ -28,8 +28,10 @@ from typing import Optional, List
 
 import numpy as np
 from PIL import Image
+from pathlib import Path
+
 from fastapi import FastAPI, File, UploadFile, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 
 # Reaproveita exatamente a lógica testada do módulo CLI.
@@ -137,6 +139,14 @@ class CortarJSON(BaseModel):
 # --------------------------------------------------------------------------
 # Rotas
 # --------------------------------------------------------------------------
+@app.get("/", response_class=HTMLResponse)
+def home():
+    html_path = Path(__file__).parent / "index.html"
+    if html_path.exists():
+        return HTMLResponse(html_path.read_text(encoding="utf-8"))
+    return HTMLResponse("<h1>Cortador de Banners</h1><p>Interface não encontrada.</p>")
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
