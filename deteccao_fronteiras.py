@@ -123,41 +123,45 @@ def cortar_fronteiras(arr, n=4, orientacao="auto", descartar_faixa=True,
     def linha(i):
         return a[i, :, :] if eixo == 0 else a[:, i, :]
 
-    def eh_separador(i):
-        """Linha é separador se for LISA (baixa variância) E CLARA (faixa branca,
-        o caso comum). Exigir clareza evita confundir conteúdo escuro liso com
-        divisória. Faixas de cor sólida muito diferentes do banner também passam
-        pelo teste de variância na transição, mas a clareza cobre o caso real."""
+    def media_linha(i):
         if i < 0 or i >= comprimento:
-            return False
-        L = linha(i)
-        lisa = float(L.var(axis=0).mean()) <= 200.0
-        clara = float(L.mean()) >= 225.0
-        return lisa and clara
+            return -1.0
+        return float(linha(i).mean())
+
+    def var_linha(i):
+        if i < 0 or i >= comprimento:
+            return 1e9
+        return float(linha(i).var(axis=0).mean())
 
     intervalos = []
     prev = 0
     for c in cortes:
         ini, fim = c, c
         if descartar_faixa:
-            # procura o separador numa janela ao redor do corte (o corte pode
-            # cair na borda da faixa, não no centro). Limite de busca generoso.
             busca = max(4, int((comprimento / n) * 0.06))
-            # acha um ponto separador perto de c
-            centro = None
+            # 1) localizar o NÚCLEO branco puro (média alta) perto do corte
+            nucleo = None
+            melhor = 240.0
             for d in range(busca + 1):
                 for cand in (c + d, c - d):
-                    if eh_separador(cand):
-                        centro = cand
+                    if 0 <= cand < comprimento and media_linha(cand) >= melhor and var_linha(cand) <= 500:
+                        nucleo = cand
                         break
-                if centro is not None:
+                if nucleo is not None:
                     break
-            if centro is not None:
-                ini = fim = centro
+            if nucleo is not None:
+                # 2) expandir o núcleo enquanto a linha for branca pura (>=238)
+                ini = fim = nucleo
                 max_exp = int((comprimento / n) * 0.10)
-                while ini - 1 > prev and eh_separador(ini - 1) and (centro - (ini - 1)) <= max_exp:
+                while ini - 1 > prev and media_linha(ini - 1) >= 238 and (nucleo - (ini - 1)) <= max_exp:
                     ini -= 1
-                while fim + 1 < comprimento and eh_separador(fim + 1) and ((fim + 1) - centro) <= max_exp:
+                while fim + 1 < comprimento and media_linha(fim + 1) >= 238 and ((fim + 1) - nucleo) <= max_exp:
+                    fim += 1
+                # 3) aparar também o degradê suave nas duas pontas da faixa:
+                #    enquanto a linha for clara (>=210) e lisa, ainda é transição
+                while ini - 1 > prev and media_linha(ini - 1) >= 210 and var_linha(ini - 1) <= 800 and (nucleo - (ini - 1)) <= max_exp:
+                    ini -= 1
+                while fim + 1 < comprimento and media_linha(fim + 1) >= 210 and var_linha(fim + 1) <= 800 and ((fim + 1) - nucleo) <= max_exp:
                     fim += 1
         intervalos.append((prev, ini))
         prev = fim + 1 if fim > ini else (fim if fim > c else c)
