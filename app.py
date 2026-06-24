@@ -52,7 +52,8 @@ def _decodificar_base64(b64: str) -> Image.Image:
 
 
 def _processar(img: Image.Image, n: int, orientacao: str,
-               w: Optional[int], h: Optional[int], fmt: str, aparar: bool = True):
+               w: Optional[int], h: Optional[int], fmt: str, aparar: bool = False,
+               usar_visao: bool = False):
     """Salva a imagem num buffer, roda o corte e devolve metadados + bytes."""
     # cortar() recebe um caminho; usamos um buffer temporário em memória.
     buf = io.BytesIO()
@@ -66,7 +67,7 @@ def _processar(img: Image.Image, n: int, orientacao: str,
         tmp_path = tmp.name
     try:
         banners, ori, fronteiras = cortar(tmp_path, n=n, orientacao=orientacao,
-                                          aparar=aparar)
+                                          aparar=aparar, usar_visao=usar_visao)
     finally:
         os.unlink(tmp_path)
 
@@ -135,7 +136,8 @@ class CortarJSON(BaseModel):
     w: Optional[int] = None
     h: Optional[int] = None
     fmt: str = "png"
-    aparar: bool = True
+    aparar: bool = False
+    usar_visao: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -158,7 +160,7 @@ def health():
 def cortar_json(body: CortarJSON, zip: int = Query(0)):
     img = _decodificar_base64(body.image_base64)
     meta, saida = _processar(img, body.n, body.orientacao, body.w, body.h,
-                             body.fmt, body.aparar)
+                             body.fmt, body.aparar, body.usar_visao)
     return _resposta_zip(saida) if zip else _resposta_json(meta, saida)
 
 
@@ -170,10 +172,11 @@ async def cortar_upload(
     w: Optional[int] = Query(None),
     h: Optional[int] = Query(None),
     fmt: str = Query("png"),
-    aparar: int = Query(1),
+    aparar: int = Query(0),
+    visao: int = Query(0),
     zip: int = Query(0),
 ):
     raw = await file.read()
     img = Image.open(io.BytesIO(raw)).convert("RGB")
-    meta, saida = _processar(img, n, orientacao, w, h, fmt, bool(aparar))
+    meta, saida = _processar(img, n, orientacao, w, h, fmt, bool(aparar), bool(visao))
     return _resposta_zip(saida) if zip else _resposta_json(meta, saida)
