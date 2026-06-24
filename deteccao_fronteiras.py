@@ -171,5 +171,38 @@ def cortar_fronteiras(arr, n=4, orientacao="auto", descartar_faixa=True,
     for (a0, a1) in intervalos:
         if a1 <= a0:
             a1 = a0 + 1
-        banners.append(arr[a0:a1, :, :] if eixo == 0 else arr[:, a0:a1, :])
+        b = arr[a0:a1, :, :] if eixo == 0 else arr[:, a0:a1, :]
+        if descartar_faixa:
+            b = _limpar_residuo_faixa(b)
+        banners.append(b)
     return banners, ori, cortes
+
+
+def _limpar_residuo_faixa(banner, lim_claro=195, var_max=150, max_frac=0.02):
+    """
+    Remove resíduo de faixa separadora nas 4 bordas: linhas/colunas que são
+    CLARAS e MUITO LISAS (variância baixíssima) — assinatura inequívoca de
+    uma faixa branca/clara sólida. Conteúdo do banner, mesmo claro, tem
+    variância alta (textura), então é preservado.
+
+    Remove no máximo `max_frac` de cada lado (poucos pixels) para nunca
+    comer conteúdo.
+    """
+    a = banner.astype(np.float32)
+    H, W = a.shape[:2]
+    maxy = max(1, int(H * max_frac)) + 2
+    maxx = max(1, int(W * max_frac)) + 2
+
+    def linha_residuo(v):
+        return v.mean() >= lim_claro and v.var(axis=0).mean() <= var_max
+
+    y0, y1, x0, x1 = 0, H, 0, W
+    while y0 < maxy and linha_residuo(a[y0]):
+        y0 += 1
+    while (H - y1) < maxy and y1 - 1 > y0 and linha_residuo(a[y1 - 1]):
+        y1 -= 1
+    while x0 < maxx and linha_residuo(a[:, x0]):
+        x0 += 1
+    while (W - x1) < maxx and x1 - 1 > x0 and linha_residuo(a[:, x1 - 1]):
+        x1 -= 1
+    return banner[y0:y1, x0:x1]
