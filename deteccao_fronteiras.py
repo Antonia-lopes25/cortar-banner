@@ -118,25 +118,49 @@ def cortar_fronteiras(arr, n=4, orientacao="auto", descartar_faixa=True,
     eixo = 0 if ori == "vertical" else 1
     comprimento = arr.shape[eixo]
 
-    # opcional: expandir cada corte para descartar uma divisória lisa fina
-    def faixa_lisa(i):
+    a = arr.astype(np.float32)
+
+    def linha(i):
+        return a[i, :, :] if eixo == 0 else a[:, i, :]
+
+    def eh_separador(i):
+        """Linha é separador se for LISA (baixa variância) E CLARA (faixa branca,
+        o caso comum). Exigir clareza evita confundir conteúdo escuro liso com
+        divisória. Faixas de cor sólida muito diferentes do banner também passam
+        pelo teste de variância na transição, mas a clareza cobre o caso real."""
         if i < 0 or i >= comprimento:
             return False
-        linha = arr[i, :, :] if eixo == 0 else arr[:, i, :]
-        return float(linha.astype(np.float32).var(axis=0).mean()) <= 120.0
+        L = linha(i)
+        lisa = float(L.var(axis=0).mean()) <= 200.0
+        clara = float(L.mean()) >= 225.0
+        return lisa and clara
 
     intervalos = []
     prev = 0
     for c in cortes:
         ini, fim = c, c
-        if descartar_faixa and faixa_lisa(c):
-            max_exp = int((comprimento / n) * 0.05)
-            while ini - 1 > prev and faixa_lisa(ini - 1) and (c - (ini - 1)) <= max_exp:
-                ini -= 1
-            while fim + 1 < comprimento and faixa_lisa(fim + 1) and ((fim + 1) - c) <= max_exp:
-                fim += 1
+        if descartar_faixa:
+            # procura o separador numa janela ao redor do corte (o corte pode
+            # cair na borda da faixa, não no centro). Limite de busca generoso.
+            busca = max(4, int((comprimento / n) * 0.06))
+            # acha um ponto separador perto de c
+            centro = None
+            for d in range(busca + 1):
+                for cand in (c + d, c - d):
+                    if eh_separador(cand):
+                        centro = cand
+                        break
+                if centro is not None:
+                    break
+            if centro is not None:
+                ini = fim = centro
+                max_exp = int((comprimento / n) * 0.10)
+                while ini - 1 > prev and eh_separador(ini - 1) and (centro - (ini - 1)) <= max_exp:
+                    ini -= 1
+                while fim + 1 < comprimento and eh_separador(fim + 1) and ((fim + 1) - centro) <= max_exp:
+                    fim += 1
         intervalos.append((prev, ini))
-        prev = fim + 1 if fim > ini else c
+        prev = fim + 1 if fim > ini else (fim if fim > c else c)
     intervalos.append((prev, comprimento))
 
     banners = []
