@@ -138,31 +138,35 @@ def cortar_fronteiras(arr, n=4, orientacao="auto", descartar_faixa=True,
     for c in cortes:
         ini, fim = c, c
         if descartar_faixa:
-            busca = max(4, int((comprimento / n) * 0.06))
+            busca = max(4, int((comprimento / n) * 0.05))
             # 1) localizar o NÚCLEO branco puro (média alta) perto do corte
             nucleo = None
-            melhor = 240.0
             for d in range(busca + 1):
                 for cand in (c + d, c - d):
-                    if 0 <= cand < comprimento and media_linha(cand) >= melhor and var_linha(cand) <= 500:
+                    if 0 <= cand < comprimento and media_linha(cand) >= 242 and var_linha(cand) <= 300:
                         nucleo = cand
                         break
                 if nucleo is not None:
                     break
             if nucleo is not None:
-                # 2) expandir o núcleo enquanto a linha for branca pura (>=238)
+                # 2) expandir SÓ pelo branco puro (>=240). Sem aparar degradê,
+                #    para não comer fundo claro de design.
                 ini = fim = nucleo
-                max_exp = int((comprimento / n) * 0.10)
-                while ini - 1 > prev and media_linha(ini - 1) >= 238 and (nucleo - (ini - 1)) <= max_exp:
+                # limite ESTREITO: divisória real é fina. Se a faixa branca for
+                # mais larga que isto, é fundo de design -> não descarta.
+                limite_faixa = max(6, int((comprimento / n) * 0.04))
+                while ini - 1 > prev and media_linha(ini - 1) >= 240 and (nucleo - (ini - 1)) <= limite_faixa:
                     ini -= 1
-                while fim + 1 < comprimento and media_linha(fim + 1) >= 238 and ((fim + 1) - nucleo) <= max_exp:
+                while fim + 1 < comprimento and media_linha(fim + 1) >= 240 and ((fim + 1) - nucleo) <= limite_faixa:
                     fim += 1
-                # 3) aparar também o degradê suave nas duas pontas da faixa:
-                #    enquanto a linha for clara (>=210) e lisa, ainda é transição
-                while ini - 1 > prev and media_linha(ini - 1) >= 210 and var_linha(ini - 1) <= 800 and (nucleo - (ini - 1)) <= max_exp:
-                    ini -= 1
-                while fim + 1 < comprimento and media_linha(fim + 1) >= 210 and var_linha(fim + 1) <= 800 and ((fim + 1) - nucleo) <= max_exp:
-                    fim += 1
+                largura_faixa = fim - ini + 1
+                # validação: a faixa precisa ser ESTREITA e ter CONTEÚDO (não-branco)
+                # logo após ela dos dois lados. Senão, é área clara do design.
+                conteudo_antes = media_linha(ini - 2) < 235 if ini - 2 > prev else True
+                conteudo_depois = media_linha(fim + 2) < 235 if fim + 2 < comprimento else True
+                if largura_faixa > limite_faixa or not (conteudo_antes or conteudo_depois):
+                    # não é divisória confiável -> não descarta, corta exato
+                    ini = fim = c
         intervalos.append((prev, ini))
         prev = fim + 1 if fim > ini else (fim if fim > c else c)
     intervalos.append((prev, comprimento))
