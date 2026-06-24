@@ -24,15 +24,26 @@ from PIL import Image
 
 
 def _perfil_mudanca(arr, eixo):
-    """Diferença de cor média entre cada faixa e a anterior, ao longo do eixo."""
+    """
+    Perfil de fronteira ao longo do eixo. Para cada posição, mede a FRAÇÃO da
+    largura/altura perpendicular que muda fortemente em relação à faixa anterior.
+
+    Esse critério é muito mais robusto que a média: a divisa real entre dois
+    banners é uma linha onde QUASE TODA a extensão perpendicular troca de
+    conteúdo de uma vez (fração alta). Já uma mudança interna a um banner (uma
+    borda de foto, um bloco de cor) muda só parte da extensão (fração baixa),
+    então não engana mais o detector.
+    """
     a = arr.astype(np.float32)
     if eixo == 0:
-        faixas = a.mean(axis=1)   # média por linha -> (H, C)
+        difpix = np.sqrt(((a[1:] - a[:-1]) ** 2).sum(axis=2))  # (H-1, W)
+        frac = (difpix > 60).mean(axis=1)
     else:
-        faixas = a.mean(axis=0)   # média por coluna -> (W, C)
-    dif = np.zeros(faixas.shape[0], dtype=np.float32)
-    dif[1:] = np.sqrt(((faixas[1:] - faixas[:-1]) ** 2).sum(axis=1))
-    return dif
+        difpix = np.sqrt(((a[:, 1:] - a[:, :-1]) ** 2).sum(axis=2))  # (H, W-1)
+        frac = (difpix > 60).mean(axis=0)
+    perfil = np.zeros(a.shape[eixo], dtype=np.float32)
+    perfil[1:] = frac
+    return perfil
 
 
 def detectar(arr, n=4, orientacao="auto", janela_frac=0.25):
