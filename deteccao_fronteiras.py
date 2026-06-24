@@ -178,31 +178,40 @@ def cortar_fronteiras(arr, n=4, orientacao="auto", descartar_faixa=True,
     return banners, ori, cortes
 
 
-def _limpar_residuo_faixa(banner, lim_claro=195, var_max=150, max_frac=0.02):
+def _limpar_residuo_faixa(banner, lim_claro=190, var_max=320, max_frac=0.02):
     """
-    Remove resíduo de faixa separadora nas 4 bordas: linhas/colunas que são
-    CLARAS e MUITO LISAS (variância baixíssima) — assinatura inequívoca de
-    uma faixa branca/clara sólida. Conteúdo do banner, mesmo claro, tem
-    variância alta (textura), então é preservado.
+    Remove resíduo fino de faixa separadora nas 4 bordas.
 
-    Remove no máximo `max_frac` de cada lado (poucos pixels) para nunca
-    comer conteúdo.
+    Uma borda é resíduo de faixa se for CLARA, LISA (variância baixa) E houver
+    um DEGRAU abrupto para a linha seguinte (a faixa branca termina e o conteúdo
+    começa de repente). O degrau distingue faixa de um fundo de design claro,
+    que muda de forma gradual. Remove no máximo `max_frac` de cada lado.
     """
     a = banner.astype(np.float32)
     H, W = a.shape[:2]
     maxy = max(1, int(H * max_frac)) + 2
     maxx = max(1, int(W * max_frac)) + 2
 
-    def linha_residuo(v):
-        return v.mean() >= lim_claro and v.var(axis=0).mean() <= var_max
+    def media(v):
+        return float(v.mean())
+
+    def var(v):
+        return float(v.var(axis=0).mean())
+
+    def eh_residuo(atual, vizinha):
+        # clara e lisa, e bem mais clara/diferente que a vizinha interna (degrau)
+        if media(atual) < lim_claro or var(atual) > var_max:
+            return False
+        # degrau: a linha interna seguinte é claramente mais escura/texturizada
+        return (media(atual) - media(vizinha) >= 25) or (var(vizinha) - var(atual) >= 300)
 
     y0, y1, x0, x1 = 0, H, 0, W
-    while y0 < maxy and linha_residuo(a[y0]):
+    while y0 < maxy and eh_residuo(a[y0], a[min(y0 + 1, H - 1)]):
         y0 += 1
-    while (H - y1) < maxy and y1 - 1 > y0 and linha_residuo(a[y1 - 1]):
+    while (H - y1) < maxy and y1 - 1 > y0 and eh_residuo(a[y1 - 1], a[max(y1 - 2, 0)]):
         y1 -= 1
-    while x0 < maxx and linha_residuo(a[:, x0]):
+    while x0 < maxx and eh_residuo(a[:, x0], a[:, min(x0 + 1, W - 1)]):
         x0 += 1
-    while (W - x1) < maxx and x1 - 1 > x0 and linha_residuo(a[:, x1 - 1]):
+    while (W - x1) < maxx and x1 - 1 > x0 and eh_residuo(a[:, x1 - 1], a[:, max(x1 - 2, 0)]):
         x1 -= 1
     return banner[y0:y1, x0:x1]
