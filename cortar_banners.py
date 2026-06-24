@@ -41,6 +41,18 @@ try:
 except Exception:
     _CV_OK = False
 
+try:
+    from deteccao_fronteiras import cortar_fronteiras as _fronteiras_cortar
+    _FRONT_OK = True
+except Exception:
+    _FRONT_OK = False
+
+try:
+    from deteccao_visao import cortar_com_visao as _visao_cortar
+    _VISAO_OK = True
+except Exception:
+    _VISAO_OK = False
+
 
 # --------------------------------------------------------------------------
 # Núcleo: perfil de corte ao longo de um eixo
@@ -457,10 +469,47 @@ def _recortar(arr, eixo, fronteiras, descartar_faixa=True):
 # --------------------------------------------------------------------------
 # Orquestração
 # --------------------------------------------------------------------------
-def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=True):
+def cortar(caminho, n=4, orientacao="auto", debug=False, aparar=False,
+           usar_visao=False, api_key=None, descartar_faixa=True):
     img = Image.open(caminho).convert("RGB")
     arr = np.asarray(img)
     H, W = arr.shape[:2]
+
+    # ---- MÉTODO PRINCIPAL: detecção por mudança de conteúdo, ancorada em N ----
+    # Código puro, sem custo. Robusto a separação variável (linha, sombra, seco).
+    if _FRONT_OK and not usar_visao:
+        try:
+            banners, ori, cortes = _fronteiras_cortar(
+                arr, n=n, orientacao=orientacao, descartar_faixa=descartar_faixa)
+            if aparar:
+                if ori == "vertical":
+                    lados = {"top": False, "bottom": False, "left": True, "right": True}
+                else:
+                    lados = {"top": True, "bottom": True, "left": False, "right": False}
+                banners = [aparar_moldura(b, lados=lados) for b in banners]
+            if debug:
+                print(f"  [debug] método: FRONTEIRAS | {ori} | cortes: {cortes}")
+            return banners, ori, cortes
+        except Exception as e:
+            if debug:
+                print(f"  [debug] fronteiras falhou ({e}); tentando outros métodos.")
+
+    # ---- MÉTODO OPCIONAL: detecção por modelo de visão (se ligado) ----
+    if usar_visao and _VISAO_OK:
+        try:
+            banners, ori, cortes = _visao_cortar(arr, n=n, api_key=api_key)
+            if aparar:
+                if ori == "vertical":
+                    lados = {"top": False, "bottom": False, "left": True, "right": True}
+                else:
+                    lados = {"top": True, "bottom": True, "left": False, "right": False}
+                banners = [aparar_moldura(b, lados=lados) for b in banners]
+            if debug:
+                print(f"  [debug] método: VISÃO | orientação: {ori} | cortes: {cortes}")
+            return banners, ori, cortes
+        except Exception as e:
+            if debug:
+                print(f"  [debug] visão indisponível ({e}); usando heurística.")
 
     fundo = _cor_fundo(arr)
     # tolerância de fundo: relativa ao contraste da imagem
